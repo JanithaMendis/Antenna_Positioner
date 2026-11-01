@@ -29,4 +29,22 @@ Notes:
 
 PlatformIO, Arduino framework (`esp32dev`). Serial monitor at 115200 baud.
 
+Firmware commands: `f <cm>`, `b <cm>`, `move <cm>` (absolute, 0–20 cm), `stop`, `pos`, `zero`, `home`, `env`, `status`, `reset`.
+`status` replies with one line for the PC app: `STATUS pos=5.00 busy=0 killed=0 t=24.3 rh=56.1`.
+
+## PC app (`pc_app/`)
+
+NanoVNA + antenna positioner GUI, based on the Version2_SE_System draft and adapted to this firmware.
+
+```
+cd pc_app
+pip install -r requirements.txt
+python se_app.py           # real hardware (close the Serial Monitor first)
+python se_app.py --demo    # VNA and antenna simulated
+```
+
+- **Antenna tab:** live position / T / RH, one command box for the firmware commands, STOP button.
+- **Measure tab:** 1–3 stops (max 20 cm). Each run moves to every stop, sweeps the VNA, logs T/RH, then returns home.
+- **Results:** SE per stop plus the average (AVG) over the stops, plots, CSV export. Sessions are saved in `pc_app/sessions/`.
+
 Speed is set by `STEP_DELAY_US` in `src/main.cpp`: RPM ≈ 150000 / STEP_DELAY_US (full step).

@@ -1,6 +1,7 @@
 // Milestones 1-2 + 5: kill-button interrupt, position control, DHT22
 // ESP32 + CNC Shield V3 + DRV8825 + NEMA 17 (full step, no jumpers)
-// Serial commands: f <cm>, b <cm>, stop, pos, zero, home, env, reset
+// Serial commands: f <cm>, b <cm>, move <cm>, stop, pos, zero, home, env, status, reset
+// 'status' prints one line for the PC app:  STATUS pos=5.00 busy=0 killed=0 t=24.3 rh=56.1
 
 #include <Arduino.h>
 #include <FastAccelStepper.h>
@@ -15,6 +16,7 @@
 const float STEPS_PER_CM = 200.0;  // 200 steps = 1 cm
 const int   SPEED        = 625;      // steps/s (~3.1 cm/s, same as the first test code)
 const int   ACCEL        = 1000000;  // steps/s^2 (effectively no ramp - smoothest in full step)
+const float MAX_CM       = 20.0;     // travel limit for 'move'
 
 FastAccelStepperEngine engine;
 FastAccelStepper *stepper;
@@ -51,7 +53,7 @@ void setup() {
 
   dht.begin();
 
-  Serial.println("Ready. Commands: f <cm>, b <cm>, stop, pos, zero, home, env, reset");
+  Serial.println("Ready. Commands: f <cm>, b <cm>, move <cm>, stop, pos, zero, home, env, status, reset");
 }
 
 void loop() {
@@ -83,6 +85,22 @@ void loop() {
     if (cmd[0] == 'b') steps = -steps;
     Serial.printf("Moving %.2f cm\n", cmd[0] == 'b' ? -cm : cm);
     stepper->move(steps);
+  } else if (cmd.startsWith("move ")) {
+    if (killed) {
+      Serial.println("Killed - type 'reset' first.");
+      return;
+    }
+    float cm = cmd.substring(5).toFloat();
+    if (cm < 0 || cm > MAX_CM) {
+      Serial.printf("Error: move must be 0 to %.0f cm\n", MAX_CM);
+      return;
+    }
+    stepper->moveTo(lround(cm * STEPS_PER_CM));   // absolute position from 0 cm
+    Serial.printf("Moving to %.2f cm\n", cm);
+  } else if (cmd == "status") {
+    Serial.printf("STATUS pos=%.2f busy=%d killed=%d t=%.1f rh=%.1f\n",
+                  stepper->getCurrentPosition() / STEPS_PER_CM,
+                  stepper->isRunning(), killed, temperature, humidity);
   } else if (cmd == "stop") {
     stepper->stopMove();
     Serial.println("Stopping");
@@ -110,6 +128,6 @@ void loop() {
     digitalWrite(EN_PIN, LOW);
     Serial.println("Reset - driver enabled");
   } else {
-    Serial.println("Commands: f <cm>, b <cm>, stop, pos, zero, home, env, reset");
+    Serial.println("Commands: f <cm>, b <cm>, move <cm>, stop, pos, zero, home, env, status, reset");
   }
 }

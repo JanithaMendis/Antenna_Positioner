@@ -3,3 +3,6 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+pc_app/sessions/
+pc_app/vna_debug_log.txt
+__pycache__/
