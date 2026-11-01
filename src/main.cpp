@@ -1,14 +1,16 @@
-// Milestones 1-2: kill-button interrupt + position control
+// Milestones 1-2 + 5: kill-button interrupt, position control, DHT22
 // ESP32 + CNC Shield V3 + DRV8825 + NEMA 17 (full step, no jumpers)
-// Serial commands: f <cm>, b <cm>, stop, pos, zero, home, reset
+// Serial commands: f <cm>, b <cm>, stop, pos, zero, home, env, reset
 
 #include <Arduino.h>
 #include <FastAccelStepper.h>
+#include <DHT.h>
 
 #define STEP_PIN 26   // X.STEP
 #define DIR_PIN  27   // X.DIR
 #define EN_PIN   25   // EN (LOW = driver ON)
 #define KILL_PIN 4    // kill button to GND
+#define DHT_PIN  13   // DHT22 module data pin
 
 const float STEPS_PER_CM = 200.0;  // 200 steps = 1 cm
 const int   SPEED        = 625;      // steps/s (~3.1 cm/s, same as the first test code)
@@ -16,6 +18,11 @@ const int   ACCEL        = 1000000;  // steps/s^2 (effectively no ramp - smoothe
 
 FastAccelStepperEngine engine;
 FastAccelStepper *stepper;
+
+DHT dht(DHT_PIN, DHT22);
+float temperature = NAN;         // latest reading, °C
+float humidity    = NAN;         // latest reading, %RH
+unsigned long lastDhtRead = 0;
 
 volatile bool killed = false;
 bool killReported = false;
@@ -42,10 +49,19 @@ void setup() {
   stepper->setSpeedInHz(SPEED);
   stepper->setAcceleration(ACCEL);
 
-  Serial.println("Ready. Commands: f <cm>, b <cm>, stop, pos, zero, home, reset");
+  dht.begin();
+
+  Serial.println("Ready. Commands: f <cm>, b <cm>, stop, pos, zero, home, env, reset");
 }
 
 void loop() {
+  // Read the DHT22 every 2 s (it cannot be read faster)
+  if (millis() - lastDhtRead >= 2000) {
+    lastDhtRead = millis();
+    temperature = dht.readTemperature();
+    humidity    = dht.readHumidity();
+  }
+
   // Handle a kill: stop the step pulses
   if (killed && !killReported) {
     stepper->forceStop();
@@ -82,12 +98,18 @@ void loop() {
     }
     stepper->moveTo(0);                      // drive back to the 0 cm point
     Serial.println("Going to 0 cm");
+  } else if (cmd == "env") {
+    if (isnan(temperature) || isnan(humidity)) {
+      Serial.println("DHT22 read failed - check wiring");
+    } else {
+      Serial.printf("Temperature: %.1f C   Humidity: %.1f %%\n", temperature, humidity);
+    }
   } else if (cmd == "reset") {
     killed = false;
     killReported = false;
     digitalWrite(EN_PIN, LOW);
     Serial.println("Reset - driver enabled");
   } else {
-    Serial.println("Commands: f <cm>, b <cm>, stop, pos, zero, home, reset");
+    Serial.println("Commands: f <cm>, b <cm>, stop, pos, zero, home, env, reset");
   }
 }
