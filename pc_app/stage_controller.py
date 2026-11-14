@@ -94,7 +94,15 @@ class StageController(_Common):
         self.on_line = on_line           # called with every reply line except STATUS
         self.lock = threading.Lock()
         time.sleep(2.5)                  # the ESP32 reboots when the port opens (firmware waits 2 s)
-        self.status()                    # check the firmware answers
+        for attempt in range(3):         # check the firmware answers (retry while it finishes booting)
+            self.ser.reset_input_buffer()   # drop the boot messages
+            try:
+                self.status()
+                break
+            except StageError:
+                if attempt == 2:
+                    raise
+                time.sleep(1.0)
         self.fw = "Antenna Positioner firmware"
 
     def send(self, cmd: str, timeout: float = 1.0) -> list[str]:
