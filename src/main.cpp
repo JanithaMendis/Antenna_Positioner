@@ -192,6 +192,15 @@ void setup() {
   for (int a = 0; a < 2; a++) {
     stepper[a]->setSpeedInHz(SPEED);
     stepper[a]->setAcceleration(ACCEL);
+
+    // After a restart: if the axis is resting on a limit switch, set its position
+    if (pressed(MIN_PIN[a])) {
+      stepper[a]->setCurrentPosition(0);
+      Serial.printf("%c on MIN switch - position 0 cm\n", AXIS_NAME[a]);
+    } else if (pressed(MAX_PIN[a])) {
+      stepper[a]->setCurrentPosition(lround(MAX_CM * STEPS_PER_CM));
+      Serial.printf("%c on MAX switch - position %.0f cm\n", AXIS_NAME[a], MAX_CM);
+    }
   }
 
   dht.begin();
