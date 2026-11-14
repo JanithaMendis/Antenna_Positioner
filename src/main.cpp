@@ -25,13 +25,14 @@
 const float STEPS_PER_CM = 200.0;  // 200 steps = 1 cm (both axes)
 const int   SPEED        = 625;      // steps/s (~3.1 cm/s)
 const int   ACCEL        = 1000000;  // steps/s^2 (effectively no ramp)
+const float MAX_CM       = 20.0;     // position set when the MAX switch is hit
 
 FastAccelStepperEngine engine;
 FastAccelStepper *stepper[2];       // 0 = X, 1 = Y
 const char AXIS_NAME[2] = {'X', 'Y'};
 const int  MIN_PIN[2]   = {X_MIN_PIN, Y_MIN_PIN};
 const int  MAX_PIN[2]   = {X_MAX_PIN, Y_MAX_PIN};
-int  moveDir[2] = {0, 0};           // +1 forward, -1 backward, 0 idle
+int  moveDir[2] = {0, 0};           // -1 towards MIN, +1 towards MAX, 0 idle
 bool homing[2]  = {false, false};
 
 DHT dht(DHT_PIN, DHT22);
@@ -57,19 +58,20 @@ void stopAxis(int a) {
   homing[a]  = false;
 }
 
-// Stop an axis that runs into one of its limit switches
+// Stop an axis that runs into a limit switch and set its position:
+// MIN switch = 0 cm, MAX switch = 20 cm
 void checkLimits(int a) {
-  if (homing[a] && pressed(MIN_PIN[a])) {
-    stepper[a]->forceStopAndNewPosition(0);   // min switch = 0 cm
+  if (moveDir[a] < 0 && pressed(MIN_PIN[a])) {
+    bool wasHoming = homing[a];
+    stepper[a]->forceStopAndNewPosition(0);
     moveDir[a] = 0;
     homing[a]  = false;
-    Serial.printf("%c homed - position 0 cm\n", AXIS_NAME[a]);
-  } else if (moveDir[a] < 0 && pressed(MIN_PIN[a])) {
-    stopAxis(a);
-    Serial.printf("%c MIN limit hit - stopped\n", AXIS_NAME[a]);
+    if (wasHoming) Serial.printf("%c homed - position 0 cm\n", AXIS_NAME[a]);
+    else           Serial.printf("%c MIN limit hit - position 0 cm\n", AXIS_NAME[a]);
   } else if (moveDir[a] > 0 && pressed(MAX_PIN[a])) {
-    stopAxis(a);
-    Serial.printf("%c MAX limit hit - stopped\n", AXIS_NAME[a]);
+    stepper[a]->forceStopAndNewPosition(lround(MAX_CM * STEPS_PER_CM));
+    moveDir[a] = 0;
+    Serial.printf("%c MAX limit hit - position %.0f cm\n", AXIS_NAME[a], MAX_CM);
   }
 }
 
