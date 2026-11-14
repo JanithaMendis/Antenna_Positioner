@@ -75,7 +75,8 @@ PROMPTS = {
                "in the sample holder.\n\nPress OK to start.",
     "sample": "SAMPLE run: \"{name}\"\n\nMount the sample in the holder.\n\nPress OK to start.",
 }
-COMMAND_HELP = "zero, home, reset, move <cm>, f <cm>, b <cm>, stop, pos, env, status"
+COMMAND_HELP = ("x/y move <cm>, x/y home, x/y zero, x/y f <cm>, x/y b <cm>, stop, pos, sw, env, status, reset "
+                "(no x/y = X)")
 # ===========================================================================
 
 GOOD, MUTED, BAD = "#1a7f37", "#777777", "#b42318"
@@ -206,7 +207,7 @@ class App(tk.Tk):
     def _build_stage(self, p):
         f = ttk.LabelFrame(p, text="Live position and environment", padding=6)
         f.pack(fill="x", pady=(0, 6))
-        ttk.Label(f, text="Antenna A", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky="w")
+        ttk.Label(f, text="Antennas", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky="w")
         self.ro_pos = ttk.Label(f, text="—", width=34)
         self.ro_pos.grid(row=0, column=1, sticky="w", padx=6)
         ttk.Label(f, text="Environment", font=("TkDefaultFont", 10, "bold")).grid(row=1, column=0, sticky="w")
@@ -259,6 +260,20 @@ class App(tk.Tk):
         self.settle.trace_add("write", lambda *a: self.update_plan_label())
         self.plan_lbl = ttk.Label(f, text="", foreground=MUTED, wraplength=360)
         self.plan_lbl.grid(row=2 + MAX_STOPS, column=0, columnspan=4, sticky="w", pady=(4, 0))
+
+        # Which antenna(s) move during a run
+        ttk.Label(f, text="Move antennas").grid(row=3 + MAX_STOPS, column=0, sticky="w", pady=(6, 0))
+        row = ttk.Frame(f)
+        row.grid(row=3 + MAX_STOPS, column=1, columnspan=3, sticky="w", pady=(6, 0))
+        self.move_mode = tk.StringVar(value="both")
+        self.one_axis = tk.StringVar(value="X")
+        self.axis_box = ttk.Combobox(row, textvariable=self.one_axis, values=("X", "Y"), width=3,
+                                     state="disabled")
+        for txt, val in (("Both at once", "both"), ("One antenna:", "one")):
+            ttk.Radiobutton(row, text=txt, value=val, variable=self.move_mode,
+                            command=self.update_plan_label).pack(side="left", padx=(0, 6))
+        self.axis_box.pack(side="left")
+        self.axis_box.bind("<<ComboboxSelected>>", lambda e: self.update_plan_label())
 
         f = ttk.LabelFrame(p, text="Run", padding=6)
         f.pack(fill="x", pady=(0, 6))
@@ -330,7 +345,8 @@ class App(tk.Tk):
         bar = ttk.Frame(bottom)
         bar.pack(fill="x", pady=(4, 2))
         ttk.Label(bar, text=f"Results (SE in dB; band = {BAND_NAME} {BAND_MHZ[0]:g}-{BAND_MHZ[1]:g} MHz; "
-                            "≥ = at system limit; AVG = average over the stops)").pack(side="left")
+                            "≥ = at system limit; AVG = average over the stops; "
+                            "Reference rows show |S21| dB)").pack(side="left")
         ttk.Button(bar, text="Export SE CSV…", command=self.export_csv).pack(side="right")
         ttk.Button(bar, text="Save plot…", command=self.save_plot).pack(side="right", padx=4)
         cols = ["sample", "run", "pos", "bmean", "bmin"] + [f"m{m}" for m in MARKER_FREQS_MHZ] + ["t", "rh", "dt"]
@@ -343,6 +359,7 @@ class App(tk.Tk):
             self.table.column(c, width=130 if c == "sample" else (90 if c == "run" else 70),
                               anchor="w" if c in ("sample", "run") else "e")
         self.table.tag_configure("avg", font=("TkDefaultFont", 9, "bold"))
+        self.table.tag_configure("ref", foreground=MUTED)
         sb = ttk.Scrollbar(bottom, command=self.table.yview)
         self.table.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y")
@@ -442,14 +459,25 @@ class App(tk.Tk):
             note = ""
         self.range_note.config(text=note)
 
+    def run_axes(self) -> str:
+        """Antenna axes a run moves: 'xy' (both) or 'x' / 'y' (one)."""
+        if self.move_mode.get() == "both":
+            return "xy"
+        return self.one_axis.get().lower()
+
     def update_plan_label(self):
+        if not hasattr(self, "axis_box"):          # called while the tab is still being built
+            return
+        self.axis_box.config(state="readonly" if self.move_mode.get() == "one" else "disabled")
         n = int(self.n_stops.get())
         for i, ent in enumerate(self.stop_entries):
             ent.config(state="normal" if i < n else "disabled")
         try:
             stops, _ = self.read_plan()
             txt = ", ".join(f"{c:g}" for c in stops)
-            self.plan_lbl.config(text=f"{len(stops)} stop(s): {txt} cm, then back home (0 cm).", foreground=MUTED)
+            who = "X and Y" if self.run_axes() == "xy" else self.run_axes().upper()
+            self.plan_lbl.config(text=f"{len(stops)} stop(s): {txt} cm, then back home (0 cm). "
+                                      f"Moving: {who}.", foreground=MUTED)
         except ValueError as ex:
             self.plan_lbl.config(text=str(ex), foreground=BAD)
 
@@ -535,7 +563,7 @@ class App(tk.Tk):
                     if (self.session is not None and time.time() - self._last_env_log >= ENV_LOG_INTERVAL_S
                             and not math.isnan(s["t"])):
                         self._last_env_log = time.time()
-                        self.session.log_env(s["t"], s["rh"], s["pos_cm"] * 10, 0.0)
+                        self.session.log_env(s["t"], s["rh"], s["pos_cm"] * 10, s["ypos_cm"] * 10)
                 except Exception as ex:
                     self.q.put(("stage_status_err", str(ex)))
             time.sleep(STATUS_POLL_S)
@@ -543,12 +571,12 @@ class App(tk.Tk):
     def _show_status(self, s: dict):
         self.last_status = s
         state = "KILLED - send 'reset'" if s["killed"] else ("moving" if s["busy"] else "idle")
-        self.ro_pos.config(text=f"{s['pos_cm']:6.2f} cm   {state}", foreground=BAD if s["killed"] else "black")
+        self.ro_pos.config(text=f"X {s['pos_cm']:.2f} cm   Y {s['ypos_cm']:.2f} cm   {state}", foreground=BAD if s["killed"] else "black")
         t, rh = s["t"], s["rh"]
         env = "sensor error" if math.isnan(t) else f"{t:.1f} °C    {rh:.1f} %RH"
         self.ro_env.config(text=env)
         self.sb_env.config(text="T/RH: sensor error" if math.isnan(t) else f"T {t:.1f} °C   RH {rh:.1f} %")
-        self.sb_stage.config(text=f"Antenna: {s['pos_cm']:.2f} cm" + ("  KILLED" if s["killed"] else ""),
+        self.sb_stage.config(text=f"Antenna: X {s['pos_cm']:.2f} / Y {s['ypos_cm']:.2f} cm" + ("  KILLED" if s["killed"] else ""),
                              foreground=BAD if s["killed"] else GOOD)
 
     # ================================================================== manual antenna control
@@ -596,6 +624,7 @@ class App(tk.Tk):
         except ValueError as ex:
             messagebox.showerror(APP_TITLE, str(ex))
             return
+        axes = self.run_axes()
         sample = ""
         if run_type == "sample":
             sample = self.sample_name.get().strip()
@@ -612,8 +641,8 @@ class App(tk.Tk):
                                                 "position by hand; temperature and humidity will not be recorded."):
             return
         if run_type != "reference" and self.session is not None:
-            probe = [core.Sweep("", run_type, sample, c * 10, 0.0, np.zeros(1), np.zeros(1), np.zeros(1), st)
-                     for c in stops]
+            probe = [core.Sweep("", run_type, sample, *self._plan_dists(c, axes), np.zeros(1), np.zeros(1),
+                                np.zeros(1), st) for c in stops]
             missing = [p for p in probe if core.find_match(self.session.sweeps, p, "reference") is None]
             if missing and not messagebox.askyesno(
                     APP_TITLE, f"{len(missing)} of {len(stops)} stops have no reference sweep with these "
@@ -625,13 +654,22 @@ class App(tk.Tk):
             return
         if not messagebox.askokcancel(APP_TITLE, PROMPTS[run_type].format(name=sample)):
             return
+        home_first = False
+        if axes == "xy" and self.stage is not None:
+            ans = messagebox.askyesnocancel(APP_TITLE, "Both antennas will move.\n\n"
+                                                       "Home both antennas (X and Y to the MIN switches, 0 cm) "
+                                                       "before taking the readings?")
+            if ans is None:                       # Cancel
+                return
+            home_first = ans
 
         ses = self.ensure_session()
         run_id = ses.new_run_id(run_type)
         self.abort.clear()
         self._set_busy(True)
         self.log_msg(f"{run_id}: {run_type} run{' of ' + sample if sample else ''}, {len(stops)} stop(s)")
-        threading.Thread(target=self._run_worker, args=(run_type, sample, stops, st, settle, run_id),
+        threading.Thread(target=self._run_worker,
+                         args=(run_type, sample, stops, st, settle, run_id, axes, home_first),
                          daemon=True).start()
 
     def _ask(self, msg: str) -> bool:
@@ -658,24 +696,38 @@ class App(tk.Tk):
                 raise StageAborted()
             time.sleep(0.05)
 
-    def _run_worker(self, run_type, sample, stops, st, settle, run_id):
+    def _plan_dists(self, cm: float, axes: str):
+        """(dist_a, dist_b) in mm a stop at cm will record; the antenna that stays put keeps its position."""
+        last = self.last_status or {}
+        x = cm if "x" in axes else last.get("pos_cm", 0.0)
+        y = cm if "y" in axes else last.get("ypos_cm", 0.0)
+        return round(x, 2) * 10, round(y, 2) * 10
+
+    def _run_worker(self, run_type, sample, stops, st, settle, run_id, axes, home_first=False):
         n = len(stops)
         stage = self.stage
         show = lambda s: self.q.put(("stage_status", s))
         try:
+            if home_first and stage is not None:
+                self.q.put(("status", "Homing both antennas…"))
+                stage.home("xy")
+                stage.wait_idle(abort=self.abort, on_status=show)
+                self.q.put(("log", "Both antennas homed (0 cm)"))
             for i, cm in enumerate(stops):
                 if self.abort.is_set():
                     raise StageAborted()
                 if stage is not None:
-                    self.q.put(("status", f"[{i + 1}/{n}] Moving to {cm:g} cm…"))
-                    stage.move_to(cm)
+                    self.q.put(("status", f"[{i + 1}/{n}] Moving {axes.upper()} to {cm:g} cm…"))
+                    stage.move_to(cm, axes)
                     s = stage.wait_idle(abort=self.abort, on_status=show)
                     self._wait_settle(settle)
-                    pos = round(s["pos_cm"], 2)
+                    dist_a, dist_b = round(s["pos_cm"], 2) * 10, round(s["ypos_cm"], 2) * 10
                 else:
-                    if not self._ask(f"Stop {i + 1} of {n}\n\nSet antenna A to {cm:g} cm, then press OK."):
+                    who = "both antennas" if axes == "xy" else f"antenna {axes.upper()}"
+                    if not self._ask(f"Stop {i + 1} of {n}\n\nSet {who} to {cm:g} cm, then press OK."):
                         raise StageAborted()
-                    pos = cm
+                    dist_a, dist_b = self._plan_dists(cm, axes)
+                pos = max(dist_a, dist_b) / 10
                 self._sim_state.update(dist_a=pos * 10, fixture=run_type, sample=sample)
                 self.q.put(("status", f"[{i + 1}/{n}] Sweeping at {pos:g} cm…"))
                 t0, rh0 = self._env()
@@ -683,12 +735,12 @@ class App(tk.Tk):
                                              progress=lambda p, i=i: self.q.put(("progress", (i + p) / n)),
                                              abort=self.abort)
                 t1, rh1 = self._env()
-                sw = core.Sweep(run_id, run_type, sample, pos * 10, 0.0, f, s11, s21, dict(st), t0, rh0, t1, rh1)
+                sw = core.Sweep(run_id, run_type, sample, dist_a, dist_b, f, s11, s21, dict(st), t0, rh0, t1, rh1)
                 self.session.add_sweep(sw)
                 self.q.put(("sweep", sw))
             if stage is not None:
                 self.q.put(("status", "Returning home (0 cm)…"))
-                stage.home()
+                stage.home(axes)
                 stage.wait_idle(abort=self.abort, on_status=show)
                 self.q.put(("log", "Antenna back at 0 cm"))
             self.q.put(("done", f"{run_id} finished ({n} stop(s))"))
@@ -793,6 +845,18 @@ class App(tk.Tk):
                 "—" if np.isnan(dT) else f"{dT:+.2f}"]
         self.table.insert("", "end", values=row, tags=tags)
 
+    def _ref_row(self, s):
+        """Table row for a reference sweep: its |S21| in dB (there is no SE for a reference)."""
+        fm, db = s.f / 1e6, core.db20(s.s21)
+        m = (fm >= BAND_MHZ[0]) & (fm <= BAND_MHZ[1])
+        row = ["Reference", s.run_id, s.pos_label]
+        row += [f"{np.mean(db[m]):.1f}", f"{np.min(db[m]):.1f}"] if m.any() else ["—", "—"]
+        for f0 in MARKER_FREQS_MHZ:
+            row.append(f"{np.interp(f0, fm, db):.1f}" if fm[0] <= f0 <= fm[-1] else "—")
+        t, rh = s.t_mean, s.rh_mean
+        row += ["—" if np.isnan(t) else f"{t:.1f}", "—" if np.isnan(rh) else f"{rh:.1f}", "—"]
+        self.table.insert("", "end", values=row, tags=("ref",))
+
     def refresh_results(self):
         ses = self.session
         samples = ses.samples() if ses else []
@@ -801,10 +865,13 @@ class App(tk.Tk):
             self.sel_sample.set(samples[-1])
         self.table.delete(*self.table.get_children())
         if ses:
+            for s in ses.sweeps:                         # reference runs first
+                if s.run_type == "reference":
+                    self._ref_row(s)
             for rs in self._by_run(ses.results()).values():
                 for r in rs:
                     s = r.sweep
-                    self._table_row(r, f"{s.dist_a / 10:g}", s.t_mean, s.rh_mean, s.t_mean - r.ref.t_mean)
+                    self._table_row(r, s.pos_label, s.t_mean, s.rh_mean, s.t_mean - r.ref.t_mean)
                 if len(rs) > 1:                          # average over the stops of this run
                     with np.errstate(all="ignore"):
                         t = np.nanmean([r.sweep.t_mean for r in rs]) if any(
@@ -891,13 +958,18 @@ class App(tk.Tk):
         ax.legend(fontsize=8, title="Antenna position", title_fontsize=8)
         return True
 
+    @staticmethod
+    def _stop_cm(sw) -> float:
+        """Stop distance for the SE-vs-distance plot: the antenna that was moved (the other one sits at 0)."""
+        return max(sw.dist_a, sw.dist_b) / 10
+
     def _plot_se_d(self, ax, ses, sample):
         res = ses.results(sample)
         if not res:
             return False
         colors = matplotlib.rcParams["axes.prop_cycle"].by_key()["color"]
         drew = False
-        bpts = sorted((r.sweep.dist_a / 10, *core.band_stats(r, BAND_MHZ)) for r in res
+        bpts = sorted((self._stop_cm(r.sweep), *core.band_stats(r, BAND_MHZ)) for r in res
                       if core.band_stats(r, BAND_MHZ) is not None)
         if bpts:
             x = np.array([p[0] for p in bpts])
@@ -908,7 +980,7 @@ class App(tk.Tk):
             ax.plot(x[lim], y[lim], "s", mfc="white", mec="k", ms=7)
             drew = True
         for j, m in enumerate(MARKER_FREQS_MHZ):
-            pts = [(r.sweep.dist_a / 10, *core.se_at(r, m)) for r in res if core.se_at(r, m) is not None]
+            pts = [(self._stop_cm(r.sweep), *core.se_at(r, m)) for r in res if core.se_at(r, m) is not None]
             if not pts:
                 continue
             pts.sort()
@@ -924,7 +996,7 @@ class App(tk.Tk):
         if not drew:
             return False
         ax.set_title(f"SE vs distance — {sample}   (open markers = at system limit)", fontsize=10)
-        ax.set_xlabel("Antenna A position (cm)")
+        ax.set_xlabel("Antenna position (cm)")
         ax.set_ylabel("SE (dB)")
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8, title="Frequency", title_fontsize=8)

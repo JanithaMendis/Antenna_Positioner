@@ -39,7 +39,7 @@ def parse_status(line: str) -> dict:
             d[key] = float(val)          # 'nan' (sensor error) becomes NaN
         except ValueError:
             d[key] = NAN
-    return {"pos_cm": d.get("pos", NAN), "busy": bool(d.get("busy", 0)),
+    return {"pos_cm": d.get("pos", NAN), "ypos_cm": d.get("ypos", 0.0), "busy": bool(d.get("busy", 0)),
             "killed": bool(d.get("killed", 0)), "t": d.get("t", NAN), "rh": d.get("rh", NAN)}
 
 
@@ -54,13 +54,16 @@ class _Common:
         st = self.status()
         return st["t"], st["rh"]
 
-    def move_to(self, cm: float):
+    def move_to(self, cm: float, axes: str = "x"):
+        """Move the antenna(s) in axes ("x", "y" or "xy") to cm."""
         if not 0 <= cm <= MAX_CM:
             raise StageError(f"Distance must be 0 to {MAX_CM:g} cm")
-        self.send(f"move {cm:.2f}")
+        for a in axes:
+            self.send(f"{a} move {cm:.2f}")
 
-    def home(self):
-        self.send("home")
+    def home(self, axes: str = "x"):
+        for a in axes:
+            self.send(f"{a} home")
 
     def stop(self):
         self.send("stop")
@@ -159,6 +162,8 @@ class SimulatedStage(_Common):
 
     def _reply(self, cmd: str) -> str:
         parts = cmd.split()
+        if parts and parts[0] in ("x", "y"):   # demo has one motor: 'x move 5' / 'y move 5' both move it
+            parts = parts[1:]
         name = parts[0] if parts else ""
         try:
             arg = float(parts[1]) if len(parts) > 1 else 0.0
